@@ -1,0 +1,193 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+    <meta charset="UTF-8">
+    <title>AR Hand Control Game</title>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
+
+    <style>
+        body {
+            margin: 0; padding: 0;
+            background-color: #222;
+            display: flex; flex-direction: column;
+            align-items: center; justify-content: center;
+            height: 100vh; color: white; font-family: sans-serif;
+        }
+        /* จอเกมของเรา */
+        canvas {
+            border: 4px solid #fff;
+            border-radius: 10px;
+            box-shadow: 0 0 20px rgba(0, 255, 255, 0.5);
+            background-color: #87CEEB; /* สีฟ้าเหมือนท้องฟ้ามาริโอ้ */
+        }
+        video { display: none; } /* ซ่อนวิดีโอต้นฉบับไว้ */
+        #status { margin-top: 10px; font-size: 24px; font-weight: bold; color: #00FF00;}
+    </style>
+</head>
+<body>
+
+    <h2>บังคับด้วยมือ: ขวา=ไปขวา, ซ้าย=ไปซ้าย, แบมือ=กระโดด, กำมือ=หยุด</h2>
+    <video id="input_video" autoplay playsinline></video>
+    <canvas id="game_canvas" width="800" height="450"></canvas>
+    <div id="status">กำลังโหลดกล้องและ AI...</div>
+
+    <script>
+        // ==========================================
+        // ส่วนที่ 1: ตั้งค่าตัวละครเกมและฟิสิกส์
+        // ==========================================
+        const canvas = document.getElementById('game_canvas');
+        const ctx = canvas.getContext('2d');
+        const statusText = document.getElementById('status');
+
+        // ข้อมูลตัวละครของเรา (กล่องสี่เหลี่ยมสีแดง)
+        let player = {
+            x: 100,
+            y: 300,
+            width: 40,
+            height: 40,
+            speed: 5,        // ความเร็วการเดิน
+            velocityY: 0,    // ความเร็วการร่วง (แรงโน้มถ่วง)
+            gravity: 0.8,    // แรงดึงดูด
+            jumpPower: -15,  // พลังกระโดด (ติดลบคือพุ่งขึ้นจอ)
+            isGrounded: false // แตะพื้นอยู่ไหม
+        };
+
+        const groundY = 400; // ระดับความสูงของพื้นดิน
+
+        // ตัวแปรเก็บคำสั่งที่ได้จากมือ
+        let currentCommand = "หยุด";
+
+        // ==========================================
+        // ส่วนที่ 2: ลอจิกการเล่นเกม (Game Loop)
+        // ==========================================
+        function updateGame() {
+            // 1. นำคำสั่งจากมือมาขยับตัวละคร
+            if (currentCommand === "ไปขวา") {
+                player.x += player.speed;
+            } else if (currentCommand === "ไปซ้าย") {
+                player.x -= player.speed;
+            }
+
+            // ถ้าสั่งกระโดด และตัวละครเหยียบพื้นอยู่ ให้กระโดดได้
+            if (currentCommand === "กระโดด" && player.isGrounded) {
+                player.velocityY = player.jumpPower;
+                player.isGrounded = false;
+            }
+
+            // 2. ระบบฟิสิกส์ (แรงโน้มถ่วง)
+            player.velocityY += player.gravity; // ตัวละครจะถูกดึงลงมาเรื่อยๆ
+            player.y += player.velocityY;
+
+            // เช็คการชนพื้น
+            if (player.y + player.height >= groundY) {
+                player.y = groundY - player.height;
+                player.velocityY = 0;
+                player.isGrounded = true;
+            }
+
+            // ป้องกันเดินทะลุขอบจอ
+            if (player.x < 0) player.x = 0;
+            if (player.x + player.width > canvas.width) player.x = canvas.width - player.width;
+        }
+
+        function drawGame() {
+            // ล้างหน้าจอทุกเฟรม
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+            // วาดพื้นดิน
+            ctx.fillStyle = "#8B4513"; // สีน้ำตาล
+            ctx.fillRect(0, groundY, canvas.width, canvas.height - groundY);
+            ctx.fillStyle = "#228B22"; // หญ้าสีเขียว
+            ctx.fillRect(0, groundY, canvas.width, 20);
+
+            // วาดตัวละคร
+            ctx.fillStyle = "#FF0000"; // สีแดง
+            ctx.fillRect(player.x, player.y, player.width, player.height);
+        }
+
+        // วงจรของเกม (รัน 60 รอบต่อวินาที)
+        function gameLoop() {
+            updateGame();
+            drawGame();
+            requestAnimationFrame(gameLoop);
+        }
+
+        // ==========================================
+        // ส่วนที่ 3: ระบบ AI วิเคราะห์ท่าทางมือ
+        // ==========================================
+        function onResults(results) {
+            // ซ่อนข้อความโหลดเมื่อกล้องติด
+            if(results.multiHandLandmarks.length > 0) {
+                
+                const hand = results.multiHandLandmarks[0]; // ดึงข้อมูลมือข้างแรกที่เจอ
+                
+                // จุดต่างๆ บนมือ (จุดที่ 0 คือข้อมือ, 4 คือปลายนิ้วโป้ง, 8 คือปลายนิ้วชี้, 20 คือปลายนิ้วก้อย)
+                const wrist = hand[0];
+                const thumbTip = hand[4];
+                const indexTip = hand[8];
+                const middleTip = hand[12];
+                const pinkyTip = hand[20];
+
+                // ลอจิกการวิเคราะห์ท่าทาง (Gesture Recognition)
+                
+                // เช็คว่า "กำมือ" หรือไม่? (ถ้าระยะปลายนิ้วชี้ อยู่ต่ำกว่า/ใกล้ข้อมือมากกว่าปกติ)
+                // (ใน Canvas ค่า Y ยิ่งมาก คือยิ่งอยู่ด้านล่าง)
+                let isFist = (indexTip.y > hand[5].y) && (middleTip.y > hand[9].y);
+                
+                // เช็คว่า "แบมือ (กระโดด)" หรือไม่? (ปลายนิ้วทุกนิ้วกางขึ้น และอยู่สูงกว่าข้อต่อ)
+                let isOpen = (indexTip.y < hand[5].y) && (middleTip.y < hand[9].y) && (pinkyTip.y < hand[17].y);
+
+                // เช็คทิศทางซ้ายขวา (เปรียบเทียบแกน X ของนิ้วกับข้อมือ)
+                let isThumbRight = thumbTip.x < wrist.x; // *หมายเหตุ: ภาพกล้องเว็บแคมมักจะกลับซ้ายขวา (Mirror)
+                let isPinkyLeft = pinkyTip.x > wrist.x;
+
+                // กำหนดคำสั่งเกมจากท่าทาง
+                if (isFist) {
+                    currentCommand = "หยุด";
+                } else if (isOpen) {
+                    currentCommand = "กระโดด";
+                } else if (isThumbRight && !isOpen) { // ชูนิ้วโป้งไปทางขวา
+                    currentCommand = "ไปขวา";
+                } else if (isPinkyLeft && !isOpen) { // ชูนิ้วก้อยไปทางซ้าย
+                    currentCommand = "ไปซ้าย";
+                } else {
+                    currentCommand = "หยุด"; // ท่าอื่นๆ ให้หยุด
+                }
+
+                statusText.innerText = "คำสั่งปัจจุบัน: " + currentCommand;
+            } else {
+                statusText.innerText = "มองไม่เห็นมือ ✋";
+                currentCommand = "หยุด";
+            }
+        }
+
+        // ตั้งค่า MediaPipe Hands
+        const hands = new Hands({locateFile: (file) => {
+            return `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`;
+        }});
+        hands.setOptions({
+            maxNumHands: 1, // จับมือเดียว
+            modelComplexity: 1,
+            minDetectionConfidence: 0.7, // เพิ่มความแม่นยำ (กันหลุด)
+            minTrackingConfidence: 0.7
+        });
+        hands.onResults(onResults);
+
+        // เปิดกล้องและส่งภาพให้ AI
+        const videoElement = document.getElementById('input_video');
+        const camera = new Camera(videoElement, {
+            onFrame: async () => {
+                await hands.send({image: videoElement});
+            },
+            width: 640,
+            height: 480
+        });
+        
+        camera.start(); // เริ่มกล้อง
+        gameLoop();     // เริ่มเกม
+
+    </script>
+</body>
+</html>
